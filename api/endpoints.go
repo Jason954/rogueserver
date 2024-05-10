@@ -268,7 +268,7 @@ func handleSaveData(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if storedTrainerId > 0 || storedSecretId > 0 {
+		if 1 < 0 && (storedTrainerId > 0 || storedSecretId > 0) {
 			if trainerId != storedTrainerId || secretId != storedSecretId {
 				httpError(w, r, fmt.Errorf("session out of date"), http.StatusBadRequest)
 				return
