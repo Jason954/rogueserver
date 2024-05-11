@@ -21,10 +21,11 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
-	_ "github.com/go-sql-driver/mysql"
 	"log"
 	"os"
 	"time"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
 var handle *sql.DB
@@ -36,12 +37,15 @@ func Init(username, password, protocol, address, database string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open database connection: %s", err)
 	}
+
 	conns := 1024
 	if protocol != "unix" {
 		conns = 256
 	}
+
 	handle.SetMaxOpenConns(conns)
 	handle.SetMaxIdleConns(conns / 4)
+
 	handle.SetConnMaxIdleTime(time.Second * 10)
 
 	tx, err := handle.Begin()
@@ -51,7 +55,6 @@ func Init(username, password, protocol, address, database string) error {
 
 	// accounts
 	tx.Exec("CREATE TABLE IF NOT EXISTS accounts (uuid BINARY(16) NOT NULL PRIMARY KEY, username VARCHAR(16) UNIQUE NOT NULL, hash BINARY(32) NOT NULL, salt BINARY(16) NOT NULL, registered TIMESTAMP NOT NULL, lastLoggedIn TIMESTAMP DEFAULT NULL, lastActivity TIMESTAMP DEFAULT NULL, banned TINYINT(1) NOT NULL DEFAULT 0, trainerId SMALLINT(5) UNSIGNED DEFAULT 0, secretId SMALLINT(5) UNSIGNED DEFAULT 0)")
-	tx.Exec("CREATE UNIQUE INDEX IF NOT EXISTS accountsByUsername ON accounts (username)")
 
 	// sessions
 	tx.Exec("CREATE TABLE IF NOT EXISTS sessions (token BINARY(32) NOT NULL PRIMARY KEY, uuid BINARY(16) NOT NULL, active TINYINT(1) NOT NULL DEFAULT 0, expire TIMESTAMP DEFAULT NULL, CONSTRAINT sessions_ibfk_1 FOREIGN KEY (uuid) REFERENCES accounts (uuid) ON DELETE CASCADE ON UPDATE CASCADE)")
@@ -86,12 +89,11 @@ func Init(username, password, protocol, address, database string) error {
 	// TODO temp code
 	_, err = os.Stat("userdata")
 	if err != nil {
-		if os.IsNotExist(err) { // not found, do not migrate
-			return nil
-		} else {
+		if !os.IsNotExist(err) { // not found, do not migrate
 			log.Fatalf("failed to stat userdata directory: %s", err)
-			return err
 		}
+
+		return nil
 	}
 
 	entries, err := os.ReadDir("userdata")
@@ -108,6 +110,12 @@ func Init(username, password, protocol, address, database string) error {
 		uuid, err := hex.DecodeString(uuidString)
 		if err != nil {
 			log.Printf("failed to decode uuid: %s", err)
+			continue
+		}
+
+		var count int
+		err = handle.QueryRow("SELECT COUNT(*) FROM systemSaveData WHERE uuid = ?", uuid).Scan(&count)
+		if err != nil || count != 0 {
 			continue
 		}
 
