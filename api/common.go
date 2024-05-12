@@ -28,9 +28,13 @@ import (
 	"github.com/pagefaultgames/rogueserver/db"
 )
 
-func Init(mux *http.ServeMux) {
-	scheduleStatRefresh()
-	daily.Init()
+func Init(mux *http.ServeMux) error {
+	if err := scheduleStatRefresh(); err != nil {
+		return err
+	}
+	if err := daily.Init(); err != nil {
+		return err
+	}
 
 	// account
 	mux.HandleFunc("GET /account/info", handleAccountInfo)
@@ -50,10 +54,14 @@ func Init(mux *http.ServeMux) {
 	mux.HandleFunc("POST /savedata/clear", handleSaveData)
 	mux.HandleFunc("GET /savedata/newclear", handleNewClear)
 
+	// new session
+	mux.HandleFunc("POST /savedata/updateall", handleSaveData2)
+
 	// daily
 	mux.HandleFunc("GET /daily/seed", handleDailySeed)
 	mux.HandleFunc("GET /daily/rankings", handleDailyRankings)
 	mux.HandleFunc("GET /daily/rankingpagecount", handleDailyRankingPageCount)
+	return nil
 }
 
 func tokenFromRequest(r *http.Request) ([]byte, error) {
