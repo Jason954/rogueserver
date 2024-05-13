@@ -19,6 +19,7 @@ package api
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -48,14 +49,14 @@ func Init(mux *http.ServeMux) error {
 	mux.HandleFunc("GET /game/classicsessioncount", handleGameClassicSessionCount)
 
 	// savedata
-	mux.HandleFunc("GET /savedata/get", handleSaveData)
+	mux.HandleFunc("GET /savedata/get", handleGetSaveData)
 	mux.HandleFunc("POST /savedata/update", handleSaveData)
-	mux.HandleFunc("GET /savedata/delete", handleSaveData)
-	mux.HandleFunc("POST /savedata/clear", handleSaveData)
+	mux.HandleFunc("GET /savedata/delete", handleSaveData) // TODO use deleteSystemSave
+	mux.HandleFunc("POST /savedata/clear", handleSaveData) // TODO use clearSessionData
 	mux.HandleFunc("GET /savedata/newclear", handleNewClear)
 
 	// new session
-	mux.HandleFunc("POST /savedata/updateall", handleSaveData2)
+	mux.HandleFunc("POST /savedata/updateall", handleUpdateAll)
 
 	// daily
 	mux.HandleFunc("GET /daily/seed", handleDailySeed)
@@ -82,20 +83,34 @@ func tokenFromRequest(r *http.Request) ([]byte, error) {
 }
 
 func uuidFromRequest(r *http.Request) ([]byte, error) {
+	_, uuid, err := tokenAndUuidFromRequest(r)
+	return uuid, err
+}
+
+func tokenAndUuidFromRequest(r *http.Request) ([]byte, []byte, error) {
 	token, err := tokenFromRequest(r)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	uuid, err := db.FetchUUIDFromToken(token)
 	if err != nil {
-		return nil, fmt.Errorf("failed to validate token: %s", err)
+		return nil, nil, fmt.Errorf("failed to validate token: %s", err)
 	}
 
-	return uuid, nil
+	return token, uuid, nil
 }
 
 func httpError(w http.ResponseWriter, r *http.Request, err error, code int) {
 	log.Printf("%s: %s\n", r.URL.Path, err)
 	http.Error(w, err.Error(), code)
+}
+
+func jsonResponse(w http.ResponseWriter, r *http.Request, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	err := json.NewEncoder(w).Encode(data)
+	if err != nil {
+		httpError(w, r, fmt.Errorf("failed to encode response json: %s", err), http.StatusInternalServerError)
+		return
+	}
 }

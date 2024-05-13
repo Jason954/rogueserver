@@ -20,6 +20,7 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -58,13 +59,7 @@ func handleAccountInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = json.NewEncoder(w).Encode(response)
-	if err != nil {
-		httpError(w, r, fmt.Errorf("failed to encode response json: %s", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
+	jsonResponse(w, r, response)
 }
 
 func handleAccountRegister(w http.ResponseWriter, r *http.Request) {
@@ -96,13 +91,7 @@ func handleAccountLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = json.NewEncoder(w).Encode(response)
-	if err != nil {
-		httpError(w, r, fmt.Errorf("failed to encode response json: %s", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
+	jsonResponse(w, r, response)
 }
 
 func handleAccountChangePW(w http.ResponseWriter, r *http.Request) {
@@ -144,26 +133,238 @@ func handleAccountLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 // game
-
 func handleGameTitleStats(w http.ResponseWriter, r *http.Request) {
-	err := json.NewEncoder(w).Encode(defs.TitleStats{
+	stats := defs.TitleStats{
 		PlayerCount: playerCount,
 		BattleCount: battleCount,
-	})
-	if err != nil {
-		httpError(w, r, fmt.Errorf("failed to encode response json: %s", err), http.StatusInternalServerError)
-		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	jsonResponse(w, r, stats)
 }
 
 func handleGameClassicSessionCount(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(strconv.Itoa(classicSessionCount)))
 }
 
+func handleGetSaveData(w http.ResponseWriter, r *http.Request) {
+	token, uuid, err := tokenAndUuidFromRequest(r)
+	if err != nil {
+		httpError(w, r, err, http.StatusBadRequest)
+		return
+	}
+
+	datatype := -1
+	if r.URL.Query().Has("datatype") {
+		datatype, err = strconv.Atoi(r.URL.Query().Get("datatype"))
+		if err != nil {
+			httpError(w, r, err, http.StatusBadRequest)
+			return
+		}
+	}
+
+	var slot int
+	if r.URL.Query().Has("slot") {
+		slot, err = strconv.Atoi(r.URL.Query().Get("slot"))
+		if err != nil {
+			httpError(w, r, err, http.StatusBadRequest)
+			return
+		}
+	}
+
+	var save any
+	if datatype == 0 {
+		err = db.UpdateActiveSession(uuid, token)
+		if err != nil {
+			httpError(w, r, fmt.Errorf("failed to update active session: %s", err), http.StatusBadRequest)
+			return
+		}
+	}
+
+	save, err = savedata.Get(uuid, datatype, slot)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	if err != nil {
+		httpError(w, r, err, http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, r, save)
+}
+
+// FIXME UNFINISHED!!!
+func clearSessionData(w http.ResponseWriter, r *http.Request) {
+	token, uuid, err := tokenAndUuidFromRequest(r)
+	if err != nil {
+		httpError(w, r, err, http.StatusBadRequest)
+		return
+	}
+
+	var slot int
+	if r.URL.Query().Has("slot") {
+		slot, err = strconv.Atoi(r.URL.Query().Get("slot"))
+		if err != nil {
+			httpError(w, r, err, http.StatusBadRequest)
+			return
+		}
+	}
+
+	var save any
+	var session defs.SessionSaveData
+	err = json.NewDecoder(r.Body).Decode(&session)
+	if err != nil {
+		httpError(w, r, fmt.Errorf("failed to decode request body: %s", err), http.StatusBadRequest)
+		return
+	}
+
+	save = session
+
+	var active bool
+	active, err = db.IsActiveSession(token)
+	if err != nil {
+		httpError(w, r, fmt.Errorf("failed to check active session: %s", err), http.StatusBadRequest)
+		return
+	}
+
+	var trainerId, secretId int
+	if r.URL.Query().Has("trainerId") && r.URL.Query().Has("secretId") {
+		trainerId, err = strconv.Atoi(r.URL.Query().Get("trainerId"))
+		if err != nil {
+			httpError(w, r, err, http.StatusBadRequest)
+			return
+		}
+
+		secretId, err = strconv.Atoi(r.URL.Query().Get("secretId"))
+		if err != nil {
+			httpError(w, r, err, http.StatusBadRequest)
+			return
+		}
+	}
+
+	storedTrainerId, storedSecretId, err := db.FetchTrainerIds(uuid)
+	if err != nil {
+		httpError(w, r, err, http.StatusInternalServerError)
+		return
+	}
+
+	if storedTrainerId > 0 || storedSecretId > 0 {
+		if trainerId != storedTrainerId || secretId != storedSecretId {
+			httpError(w, r, fmt.Errorf("session out of date"), http.StatusBadRequest)
+			return
+		}
+	} else {
+		err = db.UpdateTrainerIds(trainerId, secretId, uuid)
+		if err != nil {
+			httpError(w, r, fmt.Errorf("unable to update traienr ID: %s", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	if !active {
+		save = savedata.ClearResponse{Error: "session out of date"}
+	}
+
+	var seed string
+	seed, err = db.GetDailyRunSeed()
+	if err != nil {
+		httpError(w, r, err, http.StatusInternalServerError)
+		return
+	}
+
+	response, err := savedata.Clear(uuid, slot, seed, save.(defs.SessionSaveData))
+	if err != nil {
+		httpError(w, r, err, http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, r, response)
+}
+
+// FIXME UNFINISHED!!!
+func deleteSystemSave(w http.ResponseWriter, r *http.Request) {
+	token, uuid, err := tokenAndUuidFromRequest(r)
+	if err != nil {
+		httpError(w, r, err, http.StatusBadRequest)
+		return
+	}
+
+	datatype := 0
+	if r.URL.Query().Has("datatype") {
+		datatype, err = strconv.Atoi(r.URL.Query().Get("datatype"))
+		if err != nil {
+			httpError(w, r, err, http.StatusBadRequest)
+			return
+		}
+	}
+
+	var slot int
+	if r.URL.Query().Has("slot") {
+		slot, err = strconv.Atoi(r.URL.Query().Get("slot"))
+		if err != nil {
+			httpError(w, r, err, http.StatusBadRequest)
+			return
+		}
+	}
+
+	var active bool
+	active, err = db.IsActiveSession(token)
+	if err != nil {
+		httpError(w, r, fmt.Errorf("failed to check active session: %s", err), http.StatusInternalServerError)
+		return
+	}
+
+	if !active {
+		httpError(w, r, fmt.Errorf("session out of date"), http.StatusBadRequest)
+		return
+	}
+
+	var trainerId, secretId int
+
+	if r.URL.Query().Has("trainerId") && r.URL.Query().Has("secretId") {
+		trainerId, err = strconv.Atoi(r.URL.Query().Get("trainerId"))
+		if err != nil {
+			httpError(w, r, err, http.StatusBadRequest)
+			return
+		}
+
+		secretId, err = strconv.Atoi(r.URL.Query().Get("secretId"))
+		if err != nil {
+			httpError(w, r, err, http.StatusBadRequest)
+			return
+		}
+	}
+
+	storedTrainerId, storedSecretId, err := db.FetchTrainerIds(uuid)
+	if err != nil {
+		httpError(w, r, err, http.StatusInternalServerError)
+		return
+	}
+
+	if storedTrainerId > 0 || storedSecretId > 0 {
+		if trainerId != storedTrainerId || secretId != storedSecretId {
+			httpError(w, r, fmt.Errorf("session out of date"), http.StatusBadRequest)
+			return
+		}
+	} else {
+		if err := db.UpdateTrainerIds(trainerId, secretId, uuid); err != nil {
+			httpError(w, r, err, http.StatusInternalServerError)
+			return
+		}
+	}
+
+	err = savedata.Delete(uuid, datatype, slot)
+	if err != nil {
+		httpError(w, r, err, http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
 func handleSaveData(w http.ResponseWriter, r *http.Request) {
-	uuid, err := uuidFromRequest(r)
+	token, uuid, err := tokenAndUuidFromRequest(r)
 	if err != nil {
 		httpError(w, r, err, http.StatusBadRequest)
 		return
@@ -210,13 +411,6 @@ func handleSaveData(w http.ResponseWriter, r *http.Request) {
 
 			save = session
 		}
-	}
-
-	var token []byte
-	token, err = tokenFromRequest(r)
-	if err != nil {
-		httpError(w, r, err, http.StatusBadRequest)
-		return
 	}
 
 	var active bool
@@ -319,13 +513,7 @@ func handleSaveData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = json.NewEncoder(w).Encode(save)
-	if err != nil {
-		httpError(w, r, fmt.Errorf("failed to encode response json: %s", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
+	jsonResponse(w, r, save)
 }
 
 type CombinedSaveData struct {
@@ -335,15 +523,9 @@ type CombinedSaveData struct {
 }
 
 // TODO wrap this in a transaction
-func handleSaveData2(w http.ResponseWriter, r *http.Request) {
+func handleUpdateAll(w http.ResponseWriter, r *http.Request) {
 	var token []byte
-	token, err := tokenFromRequest(r)
-	if err != nil {
-		httpError(w, r, err, http.StatusBadRequest)
-		return
-	}
-
-	uuid, err := uuidFromRequest(r)
+	token, uuid, err := tokenAndUuidFromRequest(r)
 	if err != nil {
 		httpError(w, r, err, http.StatusBadRequest)
 		return
@@ -424,13 +606,7 @@ func handleNewClear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = json.NewEncoder(w).Encode(newClear)
-	if err != nil {
-		httpError(w, r, fmt.Errorf("failed to encode response json: %s", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
+	jsonResponse(w, r, newClear)
 }
 
 // daily
@@ -442,7 +618,10 @@ func handleDailySeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = w.Write([]byte(seed))
+	_, err = w.Write([]byte(seed))
+	if err != nil {
+		httpError(w, r, fmt.Errorf("failed to write seed: %s", err), http.StatusInternalServerError)
+	}
 }
 
 func handleDailyRankings(w http.ResponseWriter, r *http.Request) {
@@ -472,13 +651,7 @@ func handleDailyRankings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = json.NewEncoder(w).Encode(rankings)
-	if err != nil {
-		httpError(w, r, fmt.Errorf("failed to encode response json: %s", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
+	jsonResponse(w, r, rankings)
 }
 
 func handleDailyRankingPageCount(w http.ResponseWriter, r *http.Request) {
