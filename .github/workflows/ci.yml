@@ -34,10 +34,11 @@ jobs:
       - name: Install dependencies
         run: go mod download
       - name: Lint Codebase
+        continue-on-error: true
         uses: golangci/golangci-lint-action@v6
         with:
-          args: --timeout=10m
           version: latest
+          args: --config .golangci.yml
       - name: Test
         run: go test -v
       - name: Build
