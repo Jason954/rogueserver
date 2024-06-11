@@ -43,7 +43,7 @@ import (
 func handleAccountInfo(w http.ResponseWriter, r *http.Request) {
 	uuid, err := uuidFromRequest(r)
 	if err != nil {
-		httpError(w, r, err, http.StatusBadRequest)
+		httpError(w, r, err, http.StatusUnauthorized)
 		return
 	}
 
@@ -516,7 +516,7 @@ func legacyHandleSaveData(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if 1 < 0 && (storedTrainerId > 0 || storedSecretId > 0) {
+		if storedTrainerId > 0 || storedSecretId > 0 {
 			if trainerId != storedTrainerId || secretId != storedSecretId {
 				httpError(w, r, fmt.Errorf("session out of date: stored trainer or secret ID does not match"), http.StatusBadRequest)
 				return
